@@ -27,6 +27,8 @@ st.set_page_config(
 # ── Session-state defaults ────────────────────────────────────────────────────
 if "min_minutes" not in st.session_state:
     st.session_state["min_minutes"] = MIN_MINUTES_PLAYED
+if "min_games" not in st.session_state:
+    st.session_state["min_games"] = 5
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 st.sidebar.title("🏀 NBA Prop Analyzer")
@@ -38,6 +40,15 @@ st.session_state["min_minutes"] = st.sidebar.slider(
     value=st.session_state["min_minutes"],
     step=1,
     help="Games where a player logged fewer than this many minutes are excluded from analysis.",
+)
+
+st.session_state["min_games"] = st.sidebar.slider(
+    "Minimum matches played",
+    min_value=1,
+    max_value=40,
+    value=st.session_state["min_games"],
+    step=1,
+    help="Players with fewer qualifying games than this threshold are hidden from results.",
 )
 
 st.sidebar.divider()
@@ -151,10 +162,14 @@ df_raw = pd.DataFrame([dict(r) for r in rows])
 # ── Compute hit rates ─────────────────────────────────────────────────────────
 df_rates = compute_hit_rates(df_raw, min_minutes=min_minutes)
 
+# Apply minimum games filter
+min_games = st.session_state["min_games"]
+df_rates = df_rates[df_rates["G"] >= min_games]
+
 if df_rates.empty:
     st.warning(
-        "Not enough qualifying game data.  \n"
-        "Try reducing the **Min minutes played** slider."
+        "No players meet the current filters.  \n"
+        "Try reducing **Min minutes played** or **Minimum matches played**."
     )
     st.stop()
 
@@ -163,7 +178,8 @@ st.subheader(f"Hit Rate Analysis — {selected_label}")
 st.caption(
     f"{selected_date_str}  |  "
     f"{len(df_rates)} players shown  |  "
-    f"Min {min_minutes} min/game filter applied  |  "
+    f"Min {min_minutes} min/game  |  "
+    f"Min {min_games} matches played  |  "
     f"Green = higher hit rate, Red = lower"
 )
 
