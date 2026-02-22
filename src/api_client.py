@@ -1,9 +1,11 @@
 import time
 import logging
+from datetime import datetime as _dt
 from typing import Callable, Any
 
 import pandas as pd
 from nba_api.live.nba.endpoints.scoreboard import ScoreBoard
+from nba_api.stats.endpoints.scoreboardv2 import ScoreboardV2
 from nba_api.stats.endpoints.playergamelogs import PlayerGameLogs
 
 from config import CURRENT_SEASON, SEASON_TYPE, API_RETRY_ATTEMPTS, API_RETRY_DELAY, API_TIMEOUT
@@ -51,6 +53,59 @@ def fetch_today_scoreboard() -> list[dict]:
         )
 
     logger.info("Found %d games today.", len(games))
+    return games
+
+
+def fetch_scoreboard_for_date(game_date_str: str) -> list[dict]:
+    """Fetch games for a specific historical date (YYYY-MM-DD).
+
+    Uses the Stats API ScoreboardV2 endpoint which supports arbitrary dates.
+    """
+    date_fmt = _dt.strptime(game_date_str, "%Y-%m-%d").strftime("%m/%d/%Y")
+    logger.info("Fetching scoreboard for %s ...", game_date_str)
+    board = _retry(ScoreboardV2, game_date=date_fmt, timeout=API_TIMEOUT)
+
+    game_df = board.game_header.get_data_frame()
+    line_df = board.line_score.get_data_frame()
+
+    if game_df.empty:
+        logger.info("No games found for %s", game_date_str)
+        return []
+
+    games = []
+    for _, g in game_df.iterrows():
+        game_id = str(g["GAME_ID"])
+        home_id = int(g["HOME_TEAM_ID"])
+        away_id = int(g["VISITOR_TEAM_ID"])
+
+        def _team_info(team_id: int) -> dict:
+            row = line_df[line_df["TEAM_ID"] == team_id]
+            if row.empty:
+                return {"name": "", "city": "", "abbr": ""}
+            r = row.iloc[0]
+            return {
+                "name": str(r.get("TEAM_NICKNAME", "")),
+                "city": str(r.get("TEAM_CITY_NAME", "")),
+                "abbr": str(r.get("TEAM_ABBREVIATION", "")),
+            }
+
+        home = _team_info(home_id)
+        away = _team_info(away_id)
+
+        games.append({
+            "game_id": game_id,
+            "game_date": game_date_str,
+            "home_team_id": home_id,
+            "home_team_name": home["name"],
+            "home_team_city": home["city"],
+            "home_abbreviation": home["abbr"],
+            "away_team_id": away_id,
+            "away_team_name": away["name"],
+            "away_team_city": away["city"],
+            "away_abbreviation": away["abbr"],
+        })
+
+    logger.info("Found %d games for %s", len(games), game_date_str)
     return games
 
 

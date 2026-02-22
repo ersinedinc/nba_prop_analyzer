@@ -15,7 +15,7 @@ def _et_today() -> date:
 
 from utils import setup_logging
 from db_manager import init_db, get_connection, get_today_games, get_boxscores_for_teams
-from etl_service import run_etl
+from etl_service import run_etl, run_etl_for_date
 from calculations import compute_hit_rates, style_dataframe
 from config import MIN_MINUTES_PLAYED
 
@@ -131,12 +131,40 @@ if not games:
             "No games found for today in the database.  \n"
             "Click **Refresh Data** in the sidebar to fetch today's schedule."
         )
+        st.stop()
     else:
-        st.info(
-            f"No games found for **{selected_date_str}** in the database.  \n"
-            "Try a different date or click **Refresh Data** to load today's games."
-        )
-    st.stop()
+        # Past date with no data → auto-fetch
+        st.info(f"**{selected_date_str}** için veri bulunamadı. İndiriliyor...")
+        fetch_text = st.empty()
+        fetch_bar  = st.progress(0.0)
+
+        def _on_date_fetch(msg: str, frac: float) -> None:
+            fetch_text.text(msg)
+            fetch_bar.progress(min(frac, 1.0))
+
+        result = run_etl_for_date(selected_date_str, progress_callback=_on_date_fetch)
+        fetch_bar.progress(1.0)
+
+        if result["status"] == "FAILED":
+            st.error(f"Veri alınamadı: {result.get('error_message')}")
+            st.stop()
+
+        if result["games_found"] == 0:
+            fetch_text.empty()
+            fetch_bar.empty()
+            st.warning(f"**{selected_date_str}** tarihinde maç oynanmamış.")
+            st.stop()
+
+        # Re-query after fetch
+        with get_connection() as conn:
+            games = get_today_games(conn, selected_date_str)
+
+        fetch_text.empty()
+        fetch_bar.empty()
+
+        if not games:
+            st.warning(f"**{selected_date_str}** için veri indirilemedi.")
+            st.stop()
 
 # ── Game selector ─────────────────────────────────────────────────────────────
 game_options: dict[str, dict] = {

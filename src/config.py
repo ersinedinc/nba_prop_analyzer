@@ -11,6 +11,7 @@ DB_PATH = DATA_DIR / "nba_veri.db"
 # Season
 CURRENT_SEASON = "2025-26"
 SEASON_TYPE = "Regular Season"
+SEASON_START = "2025-10-21"  # First day of the 2025-26 regular season
 
 # API
 API_TIMEOUT = 30

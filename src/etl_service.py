@@ -1,10 +1,11 @@
 import logging
-from datetime import datetime
+from datetime import datetime, date, timedelta
 from typing import Callable
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 
-from api_client import fetch_today_scoreboard, fetch_team_game_logs
+from api_client import fetch_today_scoreboard, fetch_scoreboard_for_date, fetch_team_game_logs
 from db_manager import (
     get_connection,
     upsert_team,
@@ -15,7 +16,7 @@ from db_manager import (
     finish_etl_run,
 )
 from utils import parse_minutes
-from config import CURRENT_SEASON, SEASON_TYPE
+from config import CURRENT_SEASON, SEASON_TYPE, SEASON_START
 
 logger = logging.getLogger(__name__)
 
@@ -200,3 +201,213 @@ def _close_run(run_id: int | None, started_at: str, summary: dict) -> None:
             )
     except Exception as exc:
         logger.error("Failed to close ETL run record: %s", exc)
+
+
+def run_etl_for_date(
+    date_str: str,
+    progress_callback: Callable[[str, float], None] | None = None,
+) -> dict:
+    """Fetch games and player stats for a specific historical date (YYYY-MM-DD).
+
+    Used when the user selects a past date that has no data in the DB.
+    """
+    def _progress(msg: str, frac: float = 0.0) -> None:
+        logger.info(msg)
+        if progress_callback:
+            progress_callback(msg, frac)
+
+    summary = {
+        "status": "SUCCESS",
+        "games_found": 0,
+        "teams_processed": 0,
+        "rows_upserted": 0,
+        "error_message": None,
+    }
+
+    try:
+        _progress(f"{date_str} için maçlar alınıyor...", 0.05)
+        games = fetch_scoreboard_for_date(date_str)
+        summary["games_found"] = len(games)
+
+        if not games:
+            _progress("Bu tarihte maç bulunamadı.", 1.0)
+            return summary
+
+        # Teams already in boxscores — skip re-fetching their season logs
+        with get_connection() as conn:
+            fetched_teams: set[int] = {
+                r[0] for r in conn.execute(
+                    "SELECT DISTINCT team_id FROM boxscores"
+                ).fetchall()
+            }
+
+        # Save teams and games
+        _progress(f"{len(games)} maç kaydediliyor...", 0.15)
+        new_team_ids: list[int] = []
+
+        with get_connection() as conn:
+            for g in games:
+                for side in ("home", "away"):
+                    tid = g[f"{side}_team_id"]
+                    city = g[f"{side}_team_city"]
+                    name = g[f"{side}_team_name"]
+                    abbr = g[f"{side}_abbreviation"]
+                    upsert_team(conn, tid, f"{city} {name}", abbr)
+                    if tid not in fetched_teams:
+                        new_team_ids.append(tid)
+
+                upsert_daily_game(
+                    conn,
+                    game_id=g["game_id"],
+                    game_date=date_str,
+                    home_team_id=g["home_team_id"],
+                    away_team_id=g["away_team_id"],
+                )
+
+        # Fetch full season logs for new teams only
+        unique_new = list(set(new_team_ids))
+        total_new = len(unique_new)
+
+        for i, tid in enumerate(unique_new):
+            frac = 0.20 + (i / max(total_new, 1)) * 0.75
+            _progress(f"Takım {i + 1}/{total_new} sezon istatistikleri indiriliyor...", frac)
+            try:
+                df = fetch_team_game_logs(tid)
+                rows, _ = _store_game_logs(df, tid)
+                summary["rows_upserted"] += rows
+                summary["teams_processed"] += 1
+                fetched_teams.add(tid)
+            except Exception as exc:
+                logger.error("Takım %d logu alınamadı: %s", tid, exc)
+                summary["status"] = "PARTIAL"
+
+        _progress("Tamamlandı.", 1.0)
+
+    except Exception as exc:
+        logger.exception("run_etl_for_date failed for %s: %s", date_str, exc)
+        summary["status"] = "FAILED"
+        summary["error_message"] = str(exc)
+
+    return summary
+
+
+def run_backfill(progress_callback: Callable[[str, float], None] | None = None) -> dict:
+    """Find all missing dates since season start and fetch their game data.
+
+    For each missing date:
+      1. Fetch historical scoreboard (ScoreboardV2)
+      2. Save teams + daily_games to DB
+      3. Fetch PlayerGameLogs only for teams not yet in boxscores (full season)
+
+    Returns a summary dict.
+    """
+    def _progress(msg: str, frac: float = 0.0) -> None:
+        logger.info(msg)
+        if progress_callback:
+            progress_callback(msg, frac)
+
+    et_today = datetime.now(ZoneInfo("America/New_York")).date()
+    season_start = date.fromisoformat(SEASON_START)
+
+    # Build full list of dates from season start to yesterday
+    all_dates = []
+    d = season_start
+    while d < et_today:
+        all_dates.append(d.isoformat())
+        d += timedelta(days=1)
+
+    # Find which dates are missing from daily_games
+    with get_connection() as conn:
+        existing_dates = {
+            r[0] for r in conn.execute(
+                "SELECT DISTINCT game_date FROM daily_games"
+            ).fetchall()
+        }
+
+    missing_dates = [d for d in all_dates if d not in existing_dates]
+
+    if not missing_dates:
+        _progress("Eksik tarih bulunamadı. Tüm veriler güncel.", 1.0)
+        return {
+            "status": "SUCCESS",
+            "missing_found": 0,
+            "dates_processed": 0,
+            "rows_upserted": 0,
+            "error_message": None,
+        }
+
+    _progress(f"{len(missing_dates)} eksik tarih bulundu. İndiriliyor...", 0.0)
+
+    # Teams already in boxscores — no need to re-fetch their full season logs
+    with get_connection() as conn:
+        fetched_teams: set[int] = {
+            r[0] for r in conn.execute(
+                "SELECT DISTINCT team_id FROM boxscores"
+            ).fetchall()
+        }
+
+    summary = {
+        "status": "SUCCESS",
+        "missing_found": len(missing_dates),
+        "dates_processed": 0,
+        "rows_upserted": 0,
+        "error_message": None,
+    }
+
+    total = len(missing_dates)
+
+    for i, date_str in enumerate(missing_dates):
+        frac = i / total
+        _progress(f"{date_str} işleniyor... ({i + 1}/{total})", frac)
+
+        try:
+            games = fetch_scoreboard_for_date(date_str)
+            if not games:
+                summary["dates_processed"] += 1
+                continue
+
+            new_team_ids: list[int] = []
+
+            with get_connection() as conn:
+                for g in games:
+                    for side in ("home", "away"):
+                        tid = g[f"{side}_team_id"]
+                        city = g[f"{side}_team_city"]
+                        name = g[f"{side}_team_name"]
+                        abbr = g[f"{side}_abbreviation"]
+                        upsert_team(conn, tid, f"{city} {name}", abbr)
+                        if tid not in fetched_teams:
+                            new_team_ids.append(tid)
+
+                    upsert_daily_game(
+                        conn,
+                        game_id=g["game_id"],
+                        game_date=date_str,
+                        home_team_id=g["home_team_id"],
+                        away_team_id=g["away_team_id"],
+                    )
+
+            # Fetch full season logs only for teams we haven't seen before
+            for tid in set(new_team_ids):
+                try:
+                    _progress(f"  → Takım {tid} sezon logu indiriliyor...", frac)
+                    df = fetch_team_game_logs(tid)
+                    rows, _ = _store_game_logs(df, tid)
+                    summary["rows_upserted"] += rows
+                    fetched_teams.add(tid)
+                except Exception as exc:
+                    logger.error("Backfill: takım %d logu alınamadı: %s", tid, exc)
+                    summary["status"] = "PARTIAL"
+
+            summary["dates_processed"] += 1
+
+        except Exception as exc:
+            logger.error("Backfill: %s tarihi işlenemedi: %s", date_str, exc)
+            summary["status"] = "PARTIAL"
+
+    _progress(
+        f"Backfill tamamlandı. {summary['dates_processed']}/{total} tarih, "
+        f"{summary['rows_upserted']} satır.",
+        1.0,
+    )
+    return summary
