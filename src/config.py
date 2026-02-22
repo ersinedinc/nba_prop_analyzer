@@ -25,7 +25,7 @@ THRESHOLDS: dict[str, list[int]] = {
 }
 
 # Minimum minutes played to count a game as valid
-MIN_MINUTES_PLAYED = 10
+MIN_MINUTES_PLAYED = 25
 
 # Logging
 LOG_FILE = LOGS_DIR / "app.log"

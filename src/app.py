@@ -28,7 +28,7 @@ st.set_page_config(
 if "min_minutes" not in st.session_state:
     st.session_state["min_minutes"] = MIN_MINUTES_PLAYED
 if "min_games" not in st.session_state:
-    st.session_state["min_games"] = 5
+    st.session_state["min_games"] = 25
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 st.sidebar.title("🏀 NBA Prop Analyzer")
