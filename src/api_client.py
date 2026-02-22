@@ -1,11 +1,9 @@
 import time
 import logging
-from datetime import datetime as _dt
 from typing import Callable, Any
 
 import pandas as pd
-from nba_api.live.nba.endpoints.scoreboard import ScoreBoard
-from nba_api.stats.endpoints.scoreboardv2 import ScoreboardV2
+from nba_api.stats.endpoints.scheduleleaguev2 import ScheduleLeagueV2
 from nba_api.stats.endpoints.playergamelogs import PlayerGameLogs
 
 from config import CURRENT_SEASON, SEASON_TYPE, API_RETRY_ATTEMPTS, API_RETRY_DELAY, API_TIMEOUT
@@ -27,85 +25,40 @@ def _retry(func: Callable, *args: Any, **kwargs: Any) -> Any:
     raise RuntimeError(f"All {API_RETRY_ATTEMPTS} attempts failed for {func.__name__}") from last_exc
 
 
-def fetch_today_scoreboard() -> list[dict]:
-    """Return a list of game dicts for today from the NBA Live ScoreBoard endpoint."""
-    logger.info("Fetching today's scoreboard...")
-    board = _retry(ScoreBoard)
-    games_raw = board.games.get_dict()
+def fetch_schedule_for_date(game_date_str: str) -> list[dict]:
+    """Return regular-season games for the given date (YYYY-MM-DD).
 
-    games = []
-    for g in games_raw:
-        # gameEt format: "2025-10-22T19:30:00-04:00"
-        game_date = g.get("gameEt", "")[:10]
-        games.append(
-            {
-                "game_id": g["gameId"],
-                "game_date": game_date,
-                "home_team_id": g["homeTeam"]["teamId"],
-                "home_team_name": g["homeTeam"]["teamName"],
-                "home_team_city": g["homeTeam"]["teamCity"],
-                "home_abbreviation": g["homeTeam"]["teamTricode"],
-                "away_team_id": g["awayTeam"]["teamId"],
-                "away_team_name": g["awayTeam"]["teamName"],
-                "away_team_city": g["awayTeam"]["teamCity"],
-                "away_abbreviation": g["awayTeam"]["teamTricode"],
-            }
-        )
-
-    logger.info("Found %d games today.", len(games))
-    return games
-
-
-def fetch_scoreboard_for_date(game_date_str: str) -> list[dict]:
-    """Fetch games for a specific historical date (YYYY-MM-DD).
-
-    Uses the Stats API ScoreboardV2 endpoint which supports arbitrary dates.
+    Uses ScheduleLeagueV2 which covers the full season schedule,
+    including past, today, and future dates.
+    Preseason and playoff games are excluded by filtering on gameId prefix '002'.
     """
-    date_fmt = _dt.strptime(game_date_str, "%Y-%m-%d").strftime("%m/%d/%Y")
-    logger.info("Fetching scoreboard for %s ...", game_date_str)
-    board = _retry(ScoreboardV2, game_date=date_fmt, timeout=API_TIMEOUT)
+    logger.info("Fetching schedule for %s ...", game_date_str)
+    endpoint = _retry(ScheduleLeagueV2, season=CURRENT_SEASON, timeout=API_TIMEOUT)
+    df = endpoint.get_data_frames()[0]
 
-    game_df = board.game_header.get_data_frame()
-    line_df = board.line_score.get_data_frame()
+    # Regular season gameIds start with '002'; preseason with '001'
+    df = df[df["gameId"].str.startswith("002")].copy()
 
-    if game_df.empty:
-        logger.info("No games found for %s", game_date_str)
-        return []
+    # gameDate column is MM/DD/YYYY — convert to YYYY-MM-DD for comparison
+    df["_date"] = pd.to_datetime(df["gameDate"], format="%m/%d/%Y").dt.strftime("%Y-%m-%d")
+    df = df[df["_date"] == game_date_str]
 
     games = []
-    for _, g in game_df.iterrows():
-        game_id = str(g["GAME_ID"])
-        home_id = int(g["HOME_TEAM_ID"])
-        away_id = int(g["VISITOR_TEAM_ID"])
-
-        def _team_info(team_id: int) -> dict:
-            row = line_df[line_df["TEAM_ID"] == team_id]
-            if row.empty:
-                return {"name": "", "city": "", "abbr": ""}
-            r = row.iloc[0]
-            return {
-                "name": str(r.get("TEAM_NICKNAME", "")),
-                "city": str(r.get("TEAM_CITY_NAME", "")),
-                "abbr": str(r.get("TEAM_ABBREVIATION", "")),
-            }
-
-        home = _team_info(home_id)
-        away = _team_info(away_id)
-
+    for _, row in df.iterrows():
         games.append({
-            "game_id": game_id,
+            "game_id": str(row["gameId"]),
             "game_date": game_date_str,
-            "home_team_id": home_id,
-            "home_team_name": home["name"],
-            "home_team_city": home["city"],
-            "home_abbreviation": home["abbr"],
-            "away_team_id": away_id,
-            "away_team_name": away["name"],
-            "away_team_city": away["city"],
-            "away_abbreviation": away["abbr"],
+            "home_team_id": int(row["homeTeam_teamId"]),
+            "home_team_name": str(row["homeTeam_teamName"]),
+            "home_team_city": str(row["homeTeam_teamCity"]),
+            "home_abbreviation": str(row["homeTeam_teamTricode"]),
+            "away_team_id": int(row["awayTeam_teamId"]),
+            "away_team_name": str(row["awayTeam_teamName"]),
+            "away_team_city": str(row["awayTeam_teamCity"]),
+            "away_abbreviation": str(row["awayTeam_teamTricode"]),
         })
 
-    logger.info("Found %d games for %s", len(games), game_date_str)
+    logger.info("Found %d regular-season games for %s", len(games), game_date_str)
     return games
 
 

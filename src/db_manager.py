@@ -229,8 +229,20 @@ def get_boxscores_for_teams(
     conn: sqlite3.Connection,
     team_ids: list[int],
     min_minutes: int = 10,
+    cutoff_date: str | None = None,
 ) -> list[sqlite3.Row]:
+    """Return boxscore rows for the given teams.
+
+    Args:
+        cutoff_date: If provided, only include games on or before this date (YYYY-MM-DD).
+                     Use today's date for future-game analysis so only played games count.
+    """
     placeholders = ",".join("?" * len(team_ids))
+    params: list = [*team_ids, min_minutes]
+    cutoff_clause = ""
+    if cutoff_date:
+        cutoff_clause = "AND b.game_date <= ?"
+        params.append(cutoff_date)
     return conn.execute(
         f"""
         SELECT
@@ -249,7 +261,8 @@ def get_boxscores_for_teams(
         JOIN teams   t ON t.team_id   = b.team_id
         WHERE b.team_id IN ({placeholders})
           AND b.minutes_played >= ?
+          {cutoff_clause}
         ORDER BY b.player_id, b.game_date
         """,
-        (*team_ids, min_minutes),
+        params,
     ).fetchall()

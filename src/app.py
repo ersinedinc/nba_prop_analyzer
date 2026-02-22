@@ -109,8 +109,8 @@ with col1:
     selected_date = st.date_input(
         "Select date",
         value=default_date,
-        min_value=date(2025, 10, 1),
-        max_value=_et_today(),
+        min_value=date(2025, 10, 21),
+        max_value=date(2026, 6, 30),
     )
 
 with col2:
@@ -133,7 +133,7 @@ if not games:
         )
         st.stop()
     else:
-        # Past date with no data → auto-fetch
+        # Past or future date with no data → auto-fetch from ScheduleLeagueV2
         st.info(f"No data found for **{selected_date_str}**. Fetching now...")
         fetch_text = st.empty()
         fetch_bar  = st.progress(0.0)
@@ -181,9 +181,13 @@ selected_game = game_options[selected_label]
 team_ids = [selected_game["home_team_id"], selected_game["away_team_id"]]
 min_minutes = st.session_state["min_minutes"]
 
+# For future games use today as the stat cutoff; for past/today use the selected date.
+et_today = _et_today()
+cutoff_date = selected_date_str if selected_date <= et_today else et_today.isoformat()
+
 # ── Fetch player stats for both teams ────────────────────────────────────────
 with get_connection() as conn:
-    rows = get_boxscores_for_teams(conn, team_ids, min_minutes=min_minutes)
+    rows = get_boxscores_for_teams(conn, team_ids, min_minutes=min_minutes, cutoff_date=cutoff_date)
 
 if not rows:
     st.warning(
@@ -210,12 +214,14 @@ if df_rates.empty:
 
 # ── Display heatmap table ─────────────────────────────────────────────────────
 st.subheader(f"Hit Rate Analysis — {selected_label}")
+cutoff_note = f"  |  Stats through {cutoff_date}" if selected_date > et_today else ""
 st.caption(
     f"{selected_date_str}  |  "
     f"{len(df_rates)} players shown  |  "
     f"Min {min_minutes} min/game  |  "
     f"Min {min_games} matches played  |  "
     f"Green = higher hit rate, Red = lower"
+    f"{cutoff_note}"
 )
 
 styled = style_dataframe(df_rates)

@@ -5,7 +5,7 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
-from api_client import fetch_today_scoreboard, fetch_scoreboard_for_date, fetch_team_game_logs
+from api_client import fetch_schedule_for_date, fetch_team_game_logs
 from db_manager import (
     get_connection,
     upsert_team,
@@ -59,9 +59,10 @@ def run_etl(progress_callback: Callable[[str, float], None] | None = None) -> di
         with get_connection() as conn:
             run_id = start_etl_run(conn, started_at)
 
-        # Step 1 – Fetch today's scoreboard
-        _progress("Fetching today's scoreboard...", 0.05)
-        games = fetch_today_scoreboard()
+        # Step 1 – Fetch today's schedule (regular season only, via ScheduleLeagueV2)
+        et_today = datetime.now(ZoneInfo("America/New_York")).date().isoformat()
+        _progress("Fetching today's schedule...", 0.05)
+        games = fetch_schedule_for_date(et_today)
         summary["games_found"] = len(games)
 
         if not games:
@@ -225,8 +226,8 @@ def run_etl_for_date(
     }
 
     try:
-        _progress(f"Fetching games for {date_str}...", 0.05)
-        games = fetch_scoreboard_for_date(date_str)
+        _progress(f"Fetching schedule for {date_str}...", 0.05)
+        games = fetch_schedule_for_date(date_str)
         summary["games_found"] = len(games)
 
         if not games:
@@ -361,7 +362,7 @@ def run_backfill(progress_callback: Callable[[str, float], None] | None = None) 
         _progress(f"Processing {date_str}... ({i + 1}/{total})", frac)
 
         try:
-            games = fetch_scoreboard_for_date(date_str)
+            games = fetch_schedule_for_date(date_str)
             if not games:
                 summary["dates_processed"] += 1
                 continue
