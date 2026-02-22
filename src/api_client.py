@@ -39,8 +39,8 @@ def fetch_schedule_for_date(game_date_str: str) -> list[dict]:
     # Regular season gameIds start with '002'; preseason with '001'
     df = df[df["gameId"].str.startswith("002")].copy()
 
-    # gameDate column is MM/DD/YYYY — convert to YYYY-MM-DD for comparison
-    df["_date"] = pd.to_datetime(df["gameDate"], format="%m/%d/%Y").dt.strftime("%Y-%m-%d")
+    # gameDate column is "MM/DD/YYYY" or "MM/DD/YYYY HH:MM:SS" — normalize to YYYY-MM-DD
+    df["_date"] = pd.to_datetime(df["gameDate"], format="mixed").dt.strftime("%Y-%m-%d")
     df = df[df["_date"] == game_date_str]
 
     games = []
