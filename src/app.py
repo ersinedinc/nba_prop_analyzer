@@ -6,7 +6,12 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 import pandas as pd
 import streamlit as st
-from datetime import date
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
+
+def _et_today() -> date:
+    """Return the current date in NBA Eastern Time (America/New_York)."""
+    return datetime.now(ZoneInfo("America/New_York")).date()
 
 from utils import setup_logging
 from db_manager import init_db, get_connection, get_today_games, get_boxscores_for_teams
@@ -82,7 +87,9 @@ if st.sidebar.button("🔄 Refresh Data", use_container_width=True):
         st.sidebar.error(f"ETL failed: {summary.get('error_message')}")
 
 # ── Main page ─────────────────────────────────────────────────────────────────
+et_now = datetime.now(ZoneInfo("America/New_York"))
 st.title("Daily NBA Player Analysis")
+st.caption(f"NBA Eastern Time: {et_now.strftime('%A, %B %d, %Y  %H:%M ET')}")
 
 # ── Date picker ───────────────────────────────────────────────────────────────
 # Fetch all dates that have game data in the DB
@@ -97,13 +104,13 @@ col1, col2 = st.columns([2, 3])
 
 with col1:
     default_date = (
-        date.fromisoformat(available_dates[0]) if available_dates else date.today()
+        date.fromisoformat(available_dates[0]) if available_dates else _et_today()
     )
     selected_date = st.date_input(
         "Select date",
         value=default_date,
         min_value=date(2025, 10, 1),
-        max_value=date.today(),
+        max_value=_et_today(),
     )
 
 with col2:
@@ -119,7 +126,7 @@ with get_connection() as conn:
     games = get_today_games(conn, selected_date_str)
 
 if not games:
-    if selected_date == date.today():
+    if selected_date == _et_today():
         st.info(
             "No games found for today in the database.  \n"
             "Click **Refresh Data** in the sidebar to fetch today's schedule."
