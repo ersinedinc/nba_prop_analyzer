@@ -134,7 +134,7 @@ if not games:
         st.stop()
     else:
         # Past date with no data → auto-fetch
-        st.info(f"**{selected_date_str}** için veri bulunamadı. İndiriliyor...")
+        st.info(f"No data found for **{selected_date_str}**. Fetching now...")
         fetch_text = st.empty()
         fetch_bar  = st.progress(0.0)
 
@@ -146,13 +146,13 @@ if not games:
         fetch_bar.progress(1.0)
 
         if result["status"] == "FAILED":
-            st.error(f"Veri alınamadı: {result.get('error_message')}")
+            st.error(f"Failed to fetch data: {result.get('error_message')}")
             st.stop()
 
         if result["games_found"] == 0:
             fetch_text.empty()
             fetch_bar.empty()
-            st.warning(f"**{selected_date_str}** tarihinde maç oynanmamış.")
+            st.warning(f"No games were played on **{selected_date_str}**.")
             st.stop()
 
         # Re-query after fetch
@@ -163,7 +163,7 @@ if not games:
         fetch_bar.empty()
 
         if not games:
-            st.warning(f"**{selected_date_str}** için veri indirilemedi.")
+            st.warning(f"Could not load data for **{selected_date_str}**.")
             st.stop()
 
 # ── Game selector ─────────────────────────────────────────────────────────────

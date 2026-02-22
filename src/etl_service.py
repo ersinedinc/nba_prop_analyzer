@@ -225,12 +225,12 @@ def run_etl_for_date(
     }
 
     try:
-        _progress(f"{date_str} için maçlar alınıyor...", 0.05)
+        _progress(f"Fetching games for {date_str}...", 0.05)
         games = fetch_scoreboard_for_date(date_str)
         summary["games_found"] = len(games)
 
         if not games:
-            _progress("Bu tarihte maç bulunamadı.", 1.0)
+            _progress("No games found for this date.", 1.0)
             return summary
 
         # Teams already in boxscores — skip re-fetching their season logs
@@ -242,7 +242,7 @@ def run_etl_for_date(
             }
 
         # Save teams and games
-        _progress(f"{len(games)} maç kaydediliyor...", 0.15)
+        _progress(f"Saving {len(games)} games...", 0.15)
         new_team_ids: list[int] = []
 
         with get_connection() as conn:
@@ -270,7 +270,7 @@ def run_etl_for_date(
 
         for i, tid in enumerate(unique_new):
             frac = 0.20 + (i / max(total_new, 1)) * 0.75
-            _progress(f"Takım {i + 1}/{total_new} sezon istatistikleri indiriliyor...", frac)
+            _progress(f"Fetching season logs for team {i + 1}/{total_new}...", frac)
             try:
                 df = fetch_team_game_logs(tid)
                 rows, _ = _store_game_logs(df, tid)
@@ -278,10 +278,10 @@ def run_etl_for_date(
                 summary["teams_processed"] += 1
                 fetched_teams.add(tid)
             except Exception as exc:
-                logger.error("Takım %d logu alınamadı: %s", tid, exc)
+                logger.error("Failed to fetch logs for team %d: %s", tid, exc)
                 summary["status"] = "PARTIAL"
 
-        _progress("Tamamlandı.", 1.0)
+        _progress("Done.", 1.0)
 
     except Exception as exc:
         logger.exception("run_etl_for_date failed for %s: %s", date_str, exc)
@@ -327,7 +327,7 @@ def run_backfill(progress_callback: Callable[[str, float], None] | None = None) 
     missing_dates = [d for d in all_dates if d not in existing_dates]
 
     if not missing_dates:
-        _progress("Eksik tarih bulunamadı. Tüm veriler güncel.", 1.0)
+        _progress("No missing dates found. All data is up to date.", 1.0)
         return {
             "status": "SUCCESS",
             "missing_found": 0,
@@ -336,7 +336,7 @@ def run_backfill(progress_callback: Callable[[str, float], None] | None = None) 
             "error_message": None,
         }
 
-    _progress(f"{len(missing_dates)} eksik tarih bulundu. İndiriliyor...", 0.0)
+    _progress(f"Found {len(missing_dates)} missing dates. Fetching...", 0.0)
 
     # Teams already in boxscores — no need to re-fetch their full season logs
     with get_connection() as conn:
@@ -358,7 +358,7 @@ def run_backfill(progress_callback: Callable[[str, float], None] | None = None) 
 
     for i, date_str in enumerate(missing_dates):
         frac = i / total
-        _progress(f"{date_str} işleniyor... ({i + 1}/{total})", frac)
+        _progress(f"Processing {date_str}... ({i + 1}/{total})", frac)
 
         try:
             games = fetch_scoreboard_for_date(date_str)
@@ -390,24 +390,24 @@ def run_backfill(progress_callback: Callable[[str, float], None] | None = None) 
             # Fetch full season logs only for teams we haven't seen before
             for tid in set(new_team_ids):
                 try:
-                    _progress(f"  → Takım {tid} sezon logu indiriliyor...", frac)
+                    _progress(f"  → Fetching season logs for team {tid}...", frac)
                     df = fetch_team_game_logs(tid)
                     rows, _ = _store_game_logs(df, tid)
                     summary["rows_upserted"] += rows
                     fetched_teams.add(tid)
                 except Exception as exc:
-                    logger.error("Backfill: takım %d logu alınamadı: %s", tid, exc)
+                    logger.error("Backfill: failed to fetch logs for team %d: %s", tid, exc)
                     summary["status"] = "PARTIAL"
 
             summary["dates_processed"] += 1
 
         except Exception as exc:
-            logger.error("Backfill: %s tarihi işlenemedi: %s", date_str, exc)
+            logger.error("Backfill: failed to process date %s: %s", date_str, exc)
             summary["status"] = "PARTIAL"
 
     _progress(
-        f"Backfill tamamlandı. {summary['dates_processed']}/{total} tarih, "
-        f"{summary['rows_upserted']} satır.",
+        f"Backfill complete. {summary['dates_processed']}/{total} dates, "
+        f"{summary['rows_upserted']} rows upserted.",
         1.0,
     )
     return summary
