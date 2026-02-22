@@ -65,8 +65,26 @@ def compute_hit_rates(df: pd.DataFrame, min_minutes: int = MIN_MINUTES_PLAYED) -
     return pd.DataFrame(results)
 
 
+def _pct_to_rdylgn(value: float) -> str:
+    """Map a 0–100 value to a Red-Yellow-Green hex color without matplotlib."""
+    v = max(0.0, min(100.0, float(value))) / 100.0
+    if v <= 0.5:
+        # Red (#d73027) → Yellow (#ffffbf)
+        t = v / 0.5
+        r = int(215 + (255 - 215) * t)
+        g = int(48  + (255 - 48)  * t)
+        b = int(39  + (191 - 39)  * t)
+    else:
+        # Yellow (#ffffbf) → Green (#1a9850)
+        t = (v - 0.5) / 0.5
+        r = int(255 + (26  - 255) * t)
+        g = int(255 + (152 - 255) * t)
+        b = int(191 + (80  - 191) * t)
+    return f"background-color: #{r:02x}{g:02x}{b:02x}; color: {'#000' if v < 0.85 else '#fff'}"
+
+
 def style_dataframe(df: pd.DataFrame) -> "pd.io.formats.style.Styler":
-    """Apply a Red-Yellow-Green gradient to all hit-rate columns."""
+    """Apply a Red-Yellow-Green gradient to all hit-rate columns (no matplotlib needed)."""
     rate_cols = [
         c for c in df.columns
         if c not in ("Player", "Team", "G", "Avg Min")
@@ -77,6 +95,6 @@ def style_dataframe(df: pd.DataFrame) -> "pd.io.formats.style.Styler":
 
     return (
         df.style
-        .background_gradient(cmap="RdYlGn", subset=rate_cols, vmin=0, vmax=100)
+        .map(_pct_to_rdylgn, subset=rate_cols)
         .format(fmt)
     )
